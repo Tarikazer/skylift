@@ -1,6 +1,7 @@
 package com.example.viewmodel
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -21,7 +22,8 @@ data class ActiveExerciseUiState(
     val exerciseLog: ExerciseLog,
     val sets: List<ExerciseSet>,
     val maxWeightKg: Double,
-    val personalRecord: Double? = null
+    val personalRecord: Double? = null,
+    val lastSessionBestSet: String? = null
 )
 
 data class WorkoutSummaryData(
@@ -63,6 +65,9 @@ class ActiveWorkoutViewModel(
     val workoutFinishedSummary: StateFlow<WorkoutSummaryData?> = _workoutFinishedSummary.asStateFlow()
 
     private var timerJob: Job? = null
+    private var timerTargetRealtime: Long = 0L
+    private var timerRemainingMillisOnPause: Long = 0L
+
     private var workoutTimerJob: Job? = null
 
     init {
@@ -75,16 +80,21 @@ class ActiveWorkoutViewModel(
             while (true) {
                 delay(1000)
                 val diff = (System.currentTimeMillis() - _workoutStartTime.value) / 1000
-                _elapsedSeconds.value = diff.toInt()
+                _elapsedSeconds.value = diff.toInt().coerceAtLeast(0)
             }
         }
     }
 
     fun loadWorkout(workoutId: Long) {
+        // Reset stopwatch so it starts fresh and works again after previous finishes
+        workoutTimerJob?.cancel()
+        _elapsedSeconds.value = 0
+        _workoutStartTime.value = System.currentTimeMillis()
+        startSessionStopwatch()
+
         viewModelScope.launch {
             val workout = workoutRepository.getWorkoutByIdOnce(workoutId)
             _currentWorkout.value = workout
-            _workoutStartTime.value = System.currentTimeMillis()
             loadExercisesForWorkout(workoutId)
         }
     }
@@ -96,7 +106,9 @@ class ActiveWorkoutViewModel(
                 dayOfWeek = WorkoutViewModel.getCurrentDayOfWeek(),
                 targetMuscles = targetMuscles,
                 createdAt = System.currentTimeMillis(),
-                isRoutineTemplate = false
+                lastPerformedAt = null,
+                isRoutineTemplate = false,
+                durationMinutes = 0
             )
             val id = workoutRepository.insertWorkout(workout)
             loadWorkout(id)
@@ -114,18 +126,40 @@ class ActiveWorkoutViewModel(
         val rawLogs = workoutRepository.getExercisesForWorkoutOnce(workoutId)
         val uiStates = rawLogs.map { log ->
             val sets = ExerciseSet.listFromJsonString(log.setsDataJson).ifEmpty {
-                // Initialize default 3 sets if empty
                 listOf(
                     ExerciseSet(1, log.maxKg.coerceAtLeast(20.0), log.reps.coerceAtLeast(10), false),
                     ExerciseSet(2, log.maxKg.coerceAtLeast(20.0), log.reps.coerceAtLeast(10), false),
                     ExerciseSet(3, log.maxKg.coerceAtLeast(20.0), log.reps.coerceAtLeast(10), false)
                 )
             }
-            val maxKg = sets.filter { it.isCompleted }.maxOfOrNull { it.weightKg } ?: log.maxKg
+
+            // Max weight from completed sets only; if none completed, keep stored log.maxKg
+            val completedMax = sets.filter { it.isCompleted && it.weightKg > 0.0 }.maxOfOrNull { it.weightKg }
+            val maxKg = completedMax ?: log.maxKg
+
+            // Look up previous finished session log for best set display
+            val lastFinishedLog = workoutRepository.getLatestFinishedExerciseLog(log.exerciseName)
+            val lastBestSetText = if (lastFinishedLog != null && lastFinishedLog.setsDataJson.isNotBlank()) {
+                val prevSets = ExerciseSet.listFromJsonString(lastFinishedLog.setsDataJson)
+                val completedPrev = prevSets.filter { it.isCompleted && it.weightKg > 0.0 }
+                val bestSet = completedPrev.maxWithOrNull(compareBy({ it.weightKg }, { it.reps }))
+                    ?: prevSets.filter { it.weightKg > 0.0 }.maxWithOrNull(compareBy({ it.weightKg }, { it.reps }))
+                if (bestSet != null && bestSet.weightKg > 0.0) {
+                    val weightStr = if (bestSet.weightKg % 1.0 == 0.0) "${bestSet.weightKg.toInt()} kg" else "${bestSet.weightKg} kg"
+                    "$weightStr × ${bestSet.reps}"
+                } else null
+            } else null
+
+            // All-time PB from DAO
+            val allTimePb = workoutRepository.getPersonalBestForExerciseOnce(log.exerciseName)
+            val personalBest = allTimePb ?: (if (log.maxKg > 0.0) log.maxKg else null)
+
             ActiveExerciseUiState(
                 exerciseLog = log,
                 sets = sets,
-                maxWeightKg = maxKg
+                maxWeightKg = maxKg,
+                personalRecord = personalBest,
+                lastSessionBestSet = lastBestSetText
             )
         }
         _exercises.value = uiStates
@@ -145,12 +179,12 @@ class ActiveWorkoutViewModel(
                 targetMuscle = muscle.displayName,
                 setsCount = initialSets.size,
                 reps = 10,
-                maxKg = defaultWeight,
+                maxKg = 0.0,
                 restTimeSeconds = defaultRestSeconds,
                 setsDataJson = ExerciseSet.listToJsonString(initialSets),
                 notes = ""
             )
-            val newId = workoutRepository.insertExerciseLog(log)
+            workoutRepository.insertExerciseLog(log)
             loadExercisesForWorkout(workout.id)
         }
     }
@@ -169,8 +203,9 @@ class ActiveWorkoutViewModel(
             reps = newReps.coerceAtLeast(1)
         )
 
-        val updatedMaxKg = setList.filter { it.isCompleted }.maxOfOrNull { it.weightKg }
-            ?: setList.maxOfOrNull { it.weightKg } ?: 0.0
+        // Compute maxKg from COMPLETED sets only. If none completed, keep previous stored value
+        val completedMax = setList.filter { it.isCompleted && it.weightKg > 0.0 }.maxOfOrNull { it.weightKg }
+        val updatedMaxKg = completedMax ?: exercise.exerciseLog.maxKg
 
         val updatedLog = exercise.exerciseLog.copy(
             setsDataJson = ExerciseSet.listToJsonString(setList),
@@ -178,10 +213,15 @@ class ActiveWorkoutViewModel(
             setsCount = setList.size
         )
 
+        val updatedPb = if (completedMax != null) {
+            maxOf(exercise.personalRecord ?: 0.0, completedMax)
+        } else exercise.personalRecord
+
         currentList[exerciseIndex] = exercise.copy(
             exerciseLog = updatedLog,
             sets = setList,
-            maxWeightKg = updatedMaxKg
+            maxWeightKg = updatedMaxKg,
+            personalRecord = updatedPb
         )
         _exercises.value = currentList
 
@@ -195,10 +235,14 @@ class ActiveWorkoutViewModel(
         if (exerciseIndex !in currentList.indices) return
 
         val exercise = currentList[exerciseIndex]
-        val updatedLog = exercise.exerciseLog.copy(maxKg = newMaxKg.coerceAtLeast(0.0))
+        val clamped = newMaxKg.coerceAtLeast(0.0)
+        val updatedLog = exercise.exerciseLog.copy(maxKg = clamped)
+        val updatedPb = maxOf(exercise.personalRecord ?: 0.0, clamped)
+
         currentList[exerciseIndex] = exercise.copy(
             exerciseLog = updatedLog,
-            maxWeightKg = newMaxKg.coerceAtLeast(0.0)
+            maxWeightKg = clamped,
+            personalRecord = updatedPb
         )
         _exercises.value = currentList
 
@@ -219,18 +263,32 @@ class ActiveWorkoutViewModel(
         val newlyCompleted = !oldSet.isCompleted
         setList[setIndex] = oldSet.copy(isCompleted = newlyCompleted)
 
-        val updatedMaxKg = setList.filter { it.isCompleted }.maxOfOrNull { it.weightKg }
-            ?: setList.maxOfOrNull { it.weightKg } ?: 0.0
+        // When a set is marked done and the next set has weight 0, copy the weight from the completed set
+        if (newlyCompleted && setIndex + 1 < setList.size) {
+            val nextSet = setList[setIndex + 1]
+            if (nextSet.weightKg == 0.0) {
+                setList[setIndex + 1] = nextSet.copy(weightKg = oldSet.weightKg)
+            }
+        }
+
+        // Compute maxKg from COMPLETED sets only. If none completed, keep previous stored value
+        val completedMax = setList.filter { it.isCompleted && it.weightKg > 0.0 }.maxOfOrNull { it.weightKg }
+        val updatedMaxKg = completedMax ?: exercise.exerciseLog.maxKg
 
         val updatedLog = exercise.exerciseLog.copy(
             setsDataJson = ExerciseSet.listToJsonString(setList),
             maxKg = updatedMaxKg
         )
 
+        val updatedPb = if (completedMax != null) {
+            maxOf(exercise.personalRecord ?: 0.0, completedMax)
+        } else exercise.personalRecord
+
         currentList[exerciseIndex] = exercise.copy(
             exerciseLog = updatedLog,
             sets = setList,
-            maxWeightKg = updatedMaxKg
+            maxWeightKg = updatedMaxKg,
+            personalRecord = updatedPb
         )
         _exercises.value = currentList
 
@@ -238,7 +296,7 @@ class ActiveWorkoutViewModel(
             workoutRepository.updateExerciseLog(updatedLog)
         }
 
-        // Trigger countdown rest timer automatically if set was completed!
+        // Trigger countdown rest timer automatically if set was completed
         if (newlyCompleted && _autoStartTimerOnCheck.value) {
             val restTime = exercise.exerciseLog.restTimeSeconds.takeIf { it > 0 } ?: 60
             startRestTimer(context, restTime)
@@ -286,8 +344,9 @@ class ActiveWorkoutViewModel(
         // Renumber sets
         val renumbered = setList.mapIndexed { idx, s -> s.copy(setNumber = idx + 1) }
 
-        val updatedMaxKg = renumbered.filter { it.isCompleted }.maxOfOrNull { it.weightKg }
-            ?: renumbered.maxOfOrNull { it.weightKg } ?: 0.0
+        // Compute maxKg from completed sets only
+        val completedMax = renumbered.filter { it.isCompleted && it.weightKg > 0.0 }.maxOfOrNull { it.weightKg }
+        val updatedMaxKg = completedMax ?: exercise.exerciseLog.maxKg
 
         val updatedLog = exercise.exerciseLog.copy(
             setsCount = renumbered.size,
@@ -317,65 +376,90 @@ class ActiveWorkoutViewModel(
         }
     }
 
-    // --- Rest Timer Functions ---
+    // --- Rest Timer Functions (Timestamp-based via SystemClock.elapsedRealtime) ---
 
     fun startRestTimer(context: Context, seconds: Int) {
-        timerJob?.cancel()
+        if (seconds <= 0) return
         _restTotalDuration.value = seconds
         _restSecondsLeft.value = seconds
-        _isTimerRunning.value = true
-
-        timerJob = viewModelScope.launch {
-            while (_restSecondsLeft.value > 0 && _isTimerRunning.value) {
-                delay(1000)
-                _restSecondsLeft.value = _restSecondsLeft.value - 1
-            }
-            if (_restSecondsLeft.value == 0) {
-                _isTimerRunning.value = false
-                TimerFeedbackHelper.notifyTimerCompleted(context)
-            }
-        }
+        timerRemainingMillisOnPause = 0L
+        timerTargetRealtime = SystemClock.elapsedRealtime() + (seconds * 1000L)
+        runTimerLoop(context)
     }
 
     fun pauseTimer() {
+        if (!_isTimerRunning.value) return
         _isTimerRunning.value = false
         timerJob?.cancel()
+        val remaining = (timerTargetRealtime - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+        timerRemainingMillisOnPause = remaining
+        _restSecondsLeft.value = ((remaining + 999) / 1000).toInt()
     }
 
     fun resumeTimer(context: Context) {
         if (_restSecondsLeft.value <= 0) return
-        _isTimerRunning.value = true
-        timerJob?.cancel()
-        timerJob = viewModelScope.launch {
-            while (_restSecondsLeft.value > 0 && _isTimerRunning.value) {
-                delay(1000)
-                _restSecondsLeft.value = _restSecondsLeft.value - 1
-            }
-            if (_restSecondsLeft.value == 0) {
-                _isTimerRunning.value = false
-                TimerFeedbackHelper.notifyTimerCompleted(context)
-            }
+        val remaining = if (timerRemainingMillisOnPause > 0L) {
+            timerRemainingMillisOnPause
+        } else {
+            _restSecondsLeft.value * 1000L
         }
+        timerTargetRealtime = SystemClock.elapsedRealtime() + remaining
+        timerRemainingMillisOnPause = 0L
+        runTimerLoop(context)
     }
 
     fun addRestTime(seconds: Int) {
-        _restSecondsLeft.value = _restSecondsLeft.value + seconds
-        if (_restSecondsLeft.value > _restTotalDuration.value) {
-            _restTotalDuration.value = _restSecondsLeft.value
+        val addMillis = seconds * 1000L
+        if (_isTimerRunning.value) {
+            timerTargetRealtime += addMillis
+            val remaining = (timerTargetRealtime - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+            val newSeconds = ((remaining + 999) / 1000).toInt()
+            _restSecondsLeft.value = newSeconds
+            if (newSeconds > _restTotalDuration.value) {
+                _restTotalDuration.value = newSeconds
+            }
+        } else {
+            timerRemainingMillisOnPause += addMillis
+            val newSeconds = ((timerRemainingMillisOnPause + 999) / 1000).toInt()
+            _restSecondsLeft.value = newSeconds
+            if (newSeconds > _restTotalDuration.value) {
+                _restTotalDuration.value = newSeconds
+            }
         }
     }
 
     fun dismissTimer() {
         _isTimerRunning.value = false
         _restSecondsLeft.value = 0
+        timerRemainingMillisOnPause = 0L
         timerJob?.cancel()
+    }
+
+    private fun runTimerLoop(context: Context) {
+        timerJob?.cancel()
+        _isTimerRunning.value = true
+        timerJob = viewModelScope.launch {
+            while (_isTimerRunning.value) {
+                val now = SystemClock.elapsedRealtime()
+                val remainingMillis = timerTargetRealtime - now
+                if (remainingMillis <= 0L) {
+                    _restSecondsLeft.value = 0
+                    _isTimerRunning.value = false
+                    TimerFeedbackHelper.notifyTimerCompleted(context)
+                    break
+                } else {
+                    _restSecondsLeft.value = ((remainingMillis + 999) / 1000).toInt()
+                    delay(250)
+                }
+            }
+        }
     }
 
     fun setAutoStartTimer(enabled: Boolean) {
         _autoStartTimerOnCheck.value = enabled
     }
 
-    // --- Finish Workout ---
+    // --- Session Lifecycle: Finish & Abandon ---
 
     fun finishWorkout(onCompleted: () -> Unit) {
         val workout = _currentWorkout.value ?: return
@@ -406,6 +490,13 @@ class ActiveWorkoutViewModel(
 
         viewModelScope.launch {
             workoutRepository.updateWorkout(updatedWorkout)
+            // If there is a routine template with matching name, update its lastPerformedAt
+            val templates = workoutRepository.getRoutineTemplatesOnce()
+            val matchingTemplate = templates.firstOrNull { it.name.equals(workout.name, ignoreCase = true) }
+            if (matchingTemplate != null) {
+                workoutRepository.updateWorkout(matchingTemplate.copy(lastPerformedAt = System.currentTimeMillis()))
+            }
+
             _workoutFinishedSummary.value = WorkoutSummaryData(
                 workoutName = workout.name,
                 durationMinutes = elapsedMin,
@@ -419,6 +510,52 @@ class ActiveWorkoutViewModel(
 
     fun dismissSummary() {
         _workoutFinishedSummary.value = null
+        _currentWorkout.value = null
+        _exercises.value = emptyList()
+        _elapsedSeconds.value = 0
+        workoutTimerJob?.cancel()
+        timerJob?.cancel()
+    }
+
+    /**
+     * If the session has 0 completed sets, deletes it from DB and clears state.
+     * Otherwise leaves the session in DB and calls onKept().
+     */
+    fun abandonWorkoutIfEmpty(onDeleted: () -> Unit, onKept: () -> Unit = {}) {
+        val workout = _currentWorkout.value
+        if (workout == null) {
+            onDeleted()
+            return
+        }
+        val totalCompletedSets = _exercises.value.sumOf { ex -> ex.sets.count { it.isCompleted } }
+        if (totalCompletedSets == 0) {
+            viewModelScope.launch {
+                workoutRepository.deleteWorkoutById(workout.id)
+                _currentWorkout.value = null
+                _exercises.value = emptyList()
+                _elapsedSeconds.value = 0
+                workoutTimerJob?.cancel()
+                timerJob?.cancel()
+                onDeleted()
+            }
+        } else {
+            onKept()
+        }
+    }
+
+    fun discardSession(onDiscarded: () -> Unit) {
+        val workout = _currentWorkout.value
+        viewModelScope.launch {
+            if (workout != null) {
+                workoutRepository.deleteWorkoutById(workout.id)
+            }
+            _currentWorkout.value = null
+            _exercises.value = emptyList()
+            _elapsedSeconds.value = 0
+            workoutTimerJob?.cancel()
+            timerJob?.cancel()
+            onDiscarded()
+        }
     }
 
     override fun onCleared() {

@@ -91,7 +91,8 @@ class MainActivity : ComponentActivity() {
                     workoutViewModel = workoutViewModel,
                     activeWorkoutViewModel = activeWorkoutViewModel,
                     bodyWeightViewModel = bodyWeightViewModel,
-                    settingsViewModel = settingsViewModel
+                    settingsViewModel = settingsViewModel,
+                    backupRepository = backupRepository
                 )
             }
         }
@@ -103,12 +104,14 @@ fun SkyLiftApp(
     workoutViewModel: WorkoutViewModel,
     activeWorkoutViewModel: ActiveWorkoutViewModel,
     bodyWeightViewModel: BodyWeightViewModel,
-    settingsViewModel: SettingsViewModel
+    settingsViewModel: SettingsViewModel,
+    backupRepository: BackupRepository
 ) {
     var currentScreenRoute by rememberSaveable { mutableStateOf(Screen.DailyWorkout.route) }
 
     val activeWorkout by activeWorkoutViewModel.currentWorkout.collectAsStateWithLifecycle()
     val isSessionActive = activeWorkout != null
+    val todaysRoutine by workoutViewModel.todaysRoutine.collectAsStateWithLifecycle()
 
     val navItems = listOf(
         Screen.DailyWorkout,
@@ -127,47 +130,42 @@ fun SkyLiftApp(
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            // Hide bottom bar only during active workout if preferred, or keep navigation bar visible
-            if (currentScreenRoute != Screen.ActiveWorkout.route) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.testTag("main_bottom_nav_bar")
-                ) {
-                    navItems.forEach { screen ->
-                        val isSelected = currentScreenRoute == screen.route
-                        NavigationBarItem(
-                            selected = isSelected,
-                            onClick = {
-                                if (screen == Screen.ActiveWorkout && !isSessionActive) {
-                                    // Start quick workout if no active workout
-                                    activeWorkoutViewModel.startNewQuickWorkout()
-                                }
-                                currentScreenRoute = screen.route
-                            },
-                            icon = {
-                                if (screen == Screen.ActiveWorkout && isSessionActive) {
-                                    BadgedBox(badge = { Badge { Text("●") } }) {
-                                        Icon(screen.icon, contentDescription = screen.title)
-                                    }
-                                } else {
+            // Keep navigation bar visible across all screens
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.testTag("main_bottom_nav_bar")
+            ) {
+                navItems.forEach { screen ->
+                    val isSelected = currentScreenRoute == screen.route
+                    NavigationBarItem(
+                        selected = isSelected,
+                        onClick = {
+                            // Do not auto-start a quick workout when tapping the tab
+                            currentScreenRoute = screen.route
+                        },
+                        icon = {
+                            if (screen == Screen.ActiveWorkout && isSessionActive) {
+                                BadgedBox(badge = { Badge { Text("●") } }) {
                                     Icon(screen.icon, contentDescription = screen.title)
                                 }
-                            },
-                            label = {
-                                Text(
-                                    text = screen.title,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                            ),
-                            modifier = Modifier.testTag("nav_item_${screen.route}")
-                        )
-                    }
+                            } else {
+                                Icon(screen.icon, contentDescription = screen.title)
+                            }
+                        },
+                        label = {
+                            Text(
+                                text = screen.title,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                        ),
+                        modifier = Modifier.testTag("nav_item_${screen.route}")
+                    )
                 }
             }
         }
@@ -188,6 +186,9 @@ fun SkyLiftApp(
                         onQuickStart = {
                             activeWorkoutViewModel.startNewQuickWorkout()
                             currentScreenRoute = Screen.ActiveWorkout.route
+                        },
+                        onLoadUserProgram = {
+                            backupRepository.loadCustomUserProgram()
                         }
                     )
                 }
@@ -195,6 +196,16 @@ fun SkyLiftApp(
                 Screen.ActiveWorkout.route -> {
                     ActiveWorkoutScreen(
                         viewModel = activeWorkoutViewModel,
+                        todayRoutine = todaysRoutine,
+                        onStartTodayRoutine = {
+                            val routine = todaysRoutine
+                            if (routine != null) {
+                                activeWorkoutViewModel.startFromTemplate(routine)
+                            }
+                        },
+                        onQuickStart = {
+                            activeWorkoutViewModel.startNewQuickWorkout()
+                        },
                         onNavigateBack = {
                             currentScreenRoute = Screen.DailyWorkout.route
                         }

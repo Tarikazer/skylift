@@ -31,6 +31,17 @@ interface ExerciseLogDao {
     @Query("SELECT MAX(maxKg) FROM exercise_logs WHERE exerciseName = :exerciseName")
     fun getPersonalBestForExercise(exerciseName: String): Flow<Double?>
 
+    @Query("SELECT MAX(maxKg) FROM exercise_logs WHERE exerciseName = :exerciseName AND maxKg > 0")
+    suspend fun getPersonalBestForExerciseOnce(exerciseName: String): Double?
+
+    @Query("""
+        SELECT e.* FROM exercise_logs e 
+        INNER JOIN workouts w ON e.workoutId = w.id 
+        WHERE w.isRoutineTemplate = 0 AND w.lastPerformedAt IS NOT NULL AND e.exerciseName = :exerciseName 
+        ORDER BY w.lastPerformedAt DESC, e.timestamp DESC LIMIT 1
+    """)
+    suspend fun getLatestFinishedExerciseLog(exerciseName: String): ExerciseLog?
+
     @Query("SELECT exerciseName, MAX(maxKg) as maxWeight FROM exercise_logs GROUP BY exerciseName")
     fun getAllPersonalBests(): Flow<List<ExerciseMaxRecord>>
 

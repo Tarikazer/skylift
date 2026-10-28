@@ -56,6 +56,8 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -82,26 +84,58 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+fun formatExerciseDetails(setsCount: Int, notes: String, restSeconds: Int): String {
+    if (notes.isBlank()) {
+        return if (restSeconds > 0) "$setsCount sets • rest ${restSeconds}s" else "$setsCount sets"
+    }
+    if (notes.contains("min", ignoreCase = true) || notes.contains("stretching", ignoreCase = true)) {
+        return notes
+    }
+    val cleanNotes = notes.replace("reps", "").trim()
+    if (cleanNotes.contains("rest", ignoreCase = true)) {
+        return if (cleanNotes.startsWith("$setsCount ×")) cleanNotes else "$setsCount × $cleanNotes"
+    }
+    val restText = when {
+        restSeconds == 105 -> "rest 90-120s"
+        restSeconds == 75 -> "rest 60-90s"
+        restSeconds > 0 -> "rest ${restSeconds}s"
+        else -> ""
+    }
+    return if (restText.isNotEmpty()) {
+        "$setsCount × $cleanNotes • $restText"
+    } else {
+        "$setsCount × $cleanNotes"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DailyWorkoutScreen(
     viewModel: WorkoutViewModel,
     onStartWorkout: (Workout) -> Unit,
     onQuickStart: () -> Unit,
+    onLoadUserProgram: suspend () -> Int,
     modifier: Modifier = Modifier
 ) {
     val selectedDay by viewModel.selectedDay.collectAsStateWithLifecycle()
     val routineTemplates by viewModel.routineTemplates.collectAsStateWithLifecycle()
     val completedWorkouts by viewModel.completedWorkouts.collectAsStateWithLifecycle()
     val todaysRoutine by viewModel.todaysRoutine.collectAsStateWithLifecycle()
+    val todaysExercises by viewModel.todaysExercises.collectAsStateWithLifecycle()
 
+    val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by remember { mutableStateOf(false) }
     var routineToEdit by remember { mutableStateOf<Workout?>(null) }
     var exercisesForRoutineToEdit by remember { mutableStateOf<List<ExerciseLog>>(emptyList()) }
+
+    var workoutHistoryToShow by remember { mutableStateOf<Workout?>(null) }
+    var exercisesForHistoryToShow by remember { mutableStateOf<List<ExerciseLog>>(emptyList()) }
+
     val coroutineScope = rememberCoroutineScope()
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showCreateDialog = true },
@@ -225,7 +259,7 @@ fun DailyWorkoutScreen(
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -269,6 +303,49 @@ fun DailyWorkoutScreen(
                                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                                 )
                             }
+
+                            // Exercise List in Today's Routine Card
+                            if (todaysExercises.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "Exercises (${todaysExercises.size}):",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        todaysExercises.forEachIndexed { idx, ex ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "${idx + 1}. ${ex.exerciseName}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                Text(
+                                                    text = formatExerciseDetails(ex.setsCount, ex.notes, ex.restTimeSeconds),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -278,6 +355,7 @@ fun DailyWorkoutScreen(
                                     onClick = { onStartWorkout(r) },
                                     modifier = Modifier
                                         .weight(1f)
+                                        .height(48.dp)
                                         .testTag("start_scheduled_workout_button"),
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(
@@ -286,7 +364,7 @@ fun DailyWorkoutScreen(
                                 ) {
                                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Start Routine", fontWeight = FontWeight.Bold)
+                                    Text("Start Workout", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                 }
 
                                 OutlinedButton(
@@ -297,7 +375,9 @@ fun DailyWorkoutScreen(
                                         }
                                     },
                                     shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.testTag("edit_today_routine_button")
+                                    modifier = Modifier
+                                        .height(48.dp)
+                                        .testTag("edit_today_routine_button")
                                 ) {
                                     Icon(Icons.Default.Edit, contentDescription = "Edit Routine")
                                 }
@@ -359,9 +439,9 @@ fun DailyWorkoutScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(24.dp),
+                                .padding(20.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Icon(
                                 Icons.Default.FitnessCenter,
@@ -375,10 +455,49 @@ fun DailyWorkoutScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Create your custom split (Push, Pull, Legs) or tap Settings to load starter routines!",
+                                text = "Load your 5-day pre-made split or create your own custom routines.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            val count = onLoadUserProgram()
+                                            val msg = if (count > 0) {
+                                                "Loaded $count routines into your Weekly Split!"
+                                            } else {
+                                                "Your weekly program routines are already in your routines list."
+                                            }
+                                            snackbarHostState.showSnackbar(msg)
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1.2f)
+                                        .testTag("empty_load_my_program_button"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Icon(Icons.Default.FitnessCenter, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Load my program", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+
+                                OutlinedButton(
+                                    onClick = { showCreateDialog = true },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("empty_create_routine_button"),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("+ Create Routine", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                }
+                            }
                         }
                     }
                 }
@@ -421,6 +540,12 @@ fun DailyWorkoutScreen(
                 items(completedWorkouts.take(10), key = { it.id }) { historyItem ->
                     CompletedWorkoutHistoryCard(
                         workout = historyItem,
+                        onClick = {
+                            coroutineScope.launch {
+                                exercisesForHistoryToShow = viewModel.getExercisesForRoutine(historyItem.id)
+                                workoutHistoryToShow = historyItem
+                            }
+                        },
                         onDelete = { viewModel.deleteWorkout(historyItem) }
                     )
                 }
@@ -451,6 +576,17 @@ fun DailyWorkoutScreen(
                 viewModel.saveRoutineWithExercises(updatedWorkout, updatedExercises)
                 routineToEdit = null
                 exercisesForRoutineToEdit = emptyList()
+            }
+        )
+    }
+
+    workoutHistoryToShow?.let { histWorkout ->
+        HistoryWorkoutDetailDialog(
+            workout = histWorkout,
+            exercises = exercisesForHistoryToShow,
+            onDismiss = {
+                workoutHistoryToShow = null
+                exercisesForHistoryToShow = emptyList()
             }
         )
     }
@@ -567,13 +703,18 @@ fun RoutineTemplateCard(
 @Composable
 fun CompletedWorkoutHistoryCard(
     workout: Workout,
+    onClick: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .testTag("completed_history_card_${workout.id}")
     ) {
         Row(
             modifier = Modifier
@@ -583,6 +724,7 @@ fun CompletedWorkoutHistoryCard(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
+                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -607,16 +749,20 @@ fun CompletedWorkoutHistoryCard(
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Bold
                     )
-                    val dateStr = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault()).format(Date(workout.createdAt))
+                    val dateEpoch = workout.lastPerformedAt?.takeIf { it > 0 } ?: workout.createdAt
+                    val dateStr = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault()).format(Date(dateEpoch))
                     Text(
-                        text = "$dateStr • ${workout.durationMinutes} mins",
+                        text = "$dateStr • ${workout.durationMinutes} mins • Tap to view sets",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            IconButton(onClick = onDelete) {
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier.testTag("delete_history_${workout.id}")
+            ) {
                 Icon(
                     Icons.Default.Delete,
                     contentDescription = "Delete workout",
@@ -626,6 +772,116 @@ fun CompletedWorkoutHistoryCard(
             }
         }
     }
+}
+
+@Composable
+fun HistoryWorkoutDetailDialog(
+    workout: Workout,
+    exercises: List<ExerciseLog>,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    text = workout.name,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleLarge
+                )
+                val dateEpoch = workout.lastPerformedAt?.takeIf { it > 0 } ?: workout.createdAt
+                val dateStr = SimpleDateFormat("EEEE, MMM d, yyyy • h:mm a", Locale.getDefault()).format(Date(dateEpoch))
+                Text(
+                    text = "$dateStr • Duration: ${workout.durationMinutes} mins",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        },
+        text = {
+            if (exercises.isEmpty()) {
+                Text(
+                    text = "No exercise records logged for this workout session.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(exercises) { ex ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = ex.exerciseName,
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (ex.maxKg > 0.0) {
+                                        val maxText = if (ex.maxKg % 1.0 == 0.0) "${ex.maxKg.toInt()} kg" else "${ex.maxKg} kg"
+                                        Text(
+                                            text = "Max: $maxText",
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                }
+                                val sets = ExerciseSet.listFromJsonString(ex.setsDataJson)
+                                if (sets.isNotEmpty()) {
+                                    sets.forEach { s ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Set ${s.setNumber}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            val wStr = if (s.weightKg % 1.0 == 0.0) "${s.weightKg.toInt()} kg" else "${s.weightKg} kg"
+                                            Text(
+                                                text = "$wStr × ${s.reps} reps",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = if (s.isCompleted) "✓ Completed" else "Not done",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (s.isCompleted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", fontWeight = FontWeight.Bold)
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

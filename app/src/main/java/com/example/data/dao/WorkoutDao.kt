@@ -20,7 +20,7 @@ interface WorkoutDao {
     @Query("SELECT * FROM workouts WHERE isRoutineTemplate = 1 ORDER BY id ASC")
     suspend fun getRoutineTemplatesOnce(): List<Workout>
 
-    @Query("SELECT * FROM workouts WHERE isRoutineTemplate = 0 ORDER BY createdAt DESC")
+    @Query("SELECT * FROM workouts WHERE isRoutineTemplate = 0 AND lastPerformedAt IS NOT NULL ORDER BY lastPerformedAt DESC")
     fun getCompletedWorkouts(): Flow<List<Workout>>
 
     @Query("SELECT * FROM workouts WHERE id = :id LIMIT 1")

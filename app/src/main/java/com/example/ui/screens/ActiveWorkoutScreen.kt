@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
@@ -88,7 +89,10 @@ import java.util.Locale
 fun ActiveWorkoutScreen(
     viewModel: ActiveWorkoutViewModel,
     onNavigateBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    todayRoutine: com.example.data.entity.Workout? = null,
+    onStartTodayRoutine: () -> Unit = {},
+    onQuickStart: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val currentWorkout by viewModel.currentWorkout.collectAsStateWithLifecycle()
@@ -106,7 +110,119 @@ fun ActiveWorkoutScreen(
 
     // Intercept back button to confirm exit
     BackHandler {
-        showExitConfirmDialog = true
+        if (currentWorkout != null) {
+            showExitConfirmDialog = true
+        } else {
+            onNavigateBack()
+        }
+    }
+
+    // Empty state when there is no active workout session
+    if (currentWorkout == null) {
+        Scaffold(
+            modifier = modifier.fillMaxSize(),
+            topBar = {
+                TopAppBar(
+                    title = { Text("Active Session", fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onNavigateBack,
+                            modifier = Modifier.testTag("active_workout_empty_back_button")
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 28.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(80.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.FitnessCenter,
+                                contentDescription = null,
+                                modifier = Modifier.size(42.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "No active session",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+
+                    Text(
+                        text = "You are not currently in a workout session. Start today's planned routine or begin a quick open session.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Button(
+                        onClick = {
+                            if (todayRoutine != null) {
+                                onStartTodayRoutine()
+                            } else {
+                                onQuickStart()
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("start_today_routine_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val btnText = if (todayRoutine != null) {
+                            "Start today's routine (${todayRoutine.name})"
+                        } else {
+                            "Start today's routine"
+                        }
+                        Text(btnText, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = onQuickStart,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("quick_start_active_button"),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Quick Start", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    }
+                }
+            }
+        }
+        return
     }
 
     Scaffold(
@@ -292,12 +408,15 @@ fun ActiveWorkoutScreen(
         AlertDialog(
             onDismissRequest = { showExitConfirmDialog = false },
             title = { Text("Leave Workout?") },
-            text = { Text("Your sets and weight changes are saved locally. You can finish the workout now or return later.") },
+            text = { Text("If no sets have been completed, this empty session will be removed.") },
             confirmButton = {
                 Button(
                     onClick = {
                         showExitConfirmDialog = false
-                        onNavigateBack()
+                        viewModel.abandonWorkoutIfEmpty(
+                            onDeleted = onNavigateBack,
+                            onKept = onNavigateBack
+                        )
                     }
                 ) {
                     Text("Exit Session")
@@ -375,7 +494,14 @@ fun ActiveExerciseCard(
                             )
                         }
 
-                        // Max Kg Lifted Badge (Clickable to edit/update)
+                        // Max Kg Lifted Badge (Personal Record, clickable to edit/update)
+                        val maxDisplayVal = exerciseState.personalRecord ?: exerciseState.maxWeightKg.takeIf { it > 0.0 }
+                        val maxDisplayText = if (maxDisplayVal != null && maxDisplayVal > 0.0) {
+                            if (maxDisplayVal % 1.0 == 0.0) "Max: ${maxDisplayVal.toInt()} kg" else "Max: $maxDisplayVal kg"
+                        } else {
+                            "Max: -- kg"
+                        }
+
                         Surface(
                             shape = RoundedCornerShape(6.dp),
                             color = MaterialTheme.colorScheme.secondaryContainer,
@@ -396,7 +522,7 @@ fun ActiveExerciseCard(
                                     tint = GymOrange
                                 )
                                 Text(
-                                    text = if (exerciseState.maxWeightKg > 0.0) "Max: ${exerciseState.maxWeightKg} kg" else "Max: -- kg",
+                                    text = maxDisplayText,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -413,12 +539,27 @@ fun ActiveExerciseCard(
                         color = MaterialTheme.colorScheme.onSurface
                     )
 
+                    // Best set of previous finished session
+                    if (!exerciseState.lastSessionBestSet.isNullOrBlank()) {
+                        Text(
+                            text = "Last: ${exerciseState.lastSessionBestSet}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
                     // Target rep range / notes if specified
                     if (log.notes.isNotBlank()) {
+                        val notesDisplay = if (log.notes.contains("rest", ignoreCase = true) || log.notes.contains("min", ignoreCase = true)) {
+                            log.notes
+                        } else {
+                            "${log.notes} • rest ${log.restTimeSeconds}s"
+                        }
                         Text(
-                            text = "Target: ${log.notes} • Rest: ${log.restTimeSeconds}s",
+                            text = notesDisplay,
                             style = MaterialTheme.typography.bodySmall,
-                            color = SkyBluePrimary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Medium
                         )
                     }

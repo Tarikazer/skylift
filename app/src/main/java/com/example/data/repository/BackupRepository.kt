@@ -508,12 +508,12 @@ class BackupRepository(
                 dayOfWeek = "Monday",
                 targetMuscles = "Legs, Core",
                 exercises = listOf(
-                    PreMadeExercise("Squat (Barbell)", "Legs", 4, 8, "6-10 reps", 105),
-                    PreMadeExercise("Leg Press", "Legs", 4, 10, "10-12 reps", 105),
-                    PreMadeExercise("Romanian Deadlift (RDL)", "Legs", 4, 8, "8-10 reps", 90),
-                    PreMadeExercise("Leg Extension", "Legs", 3, 12, "12-15 reps", 75),
-                    PreMadeExercise("Standing Calf Raise", "Legs", 4, 12, "12-15 reps", 75),
-                    PreMadeExercise("Abdominal Machine", "Core", 3, 12, "12-15 reps", 60)
+                    PreMadeExercise("Squat (Barbell)", "Legs", 4, 8, "6-10 • rest 90-120s", 105),
+                    PreMadeExercise("Leg Press", "Legs", 4, 10, "10-12 • rest 90-120s", 105),
+                    PreMadeExercise("Romanian Deadlift (RDL)", "Legs", 4, 8, "8-10 • rest 90s", 90),
+                    PreMadeExercise("Leg Extension", "Legs", 3, 12, "12-15 • rest 60-90s", 75),
+                    PreMadeExercise("Standing Calf Raise", "Legs", 4, 12, "12-15 • rest 60-90s", 75),
+                    PreMadeExercise("Abdominal Machine", "Core", 3, 12, "12-15 • rest 60s", 60)
                 )
             ),
             PreMadeRoutine(
@@ -521,11 +521,11 @@ class BackupRepository(
                 dayOfWeek = "Tuesday",
                 targetMuscles = "Chest, Arms",
                 exercises = listOf(
-                    PreMadeExercise("Flat Bench Press (Barbell)", "Chest", 4, 8, "6-10 reps", 105),
-                    PreMadeExercise("Incline Chest Press Machine", "Chest", 3, 10, "8-12 reps", 90),
-                    PreMadeExercise("Chest Butterfly Machine", "Chest", 3, 12, "12-15 reps", 75),
-                    PreMadeExercise("Triceps Press Machine", "Arms", 3, 10, "10-12 reps", 75),
-                    PreMadeExercise("Triceps Rope Pushdown", "Arms", 3, 12, "10-15 reps", 75)
+                    PreMadeExercise("Flat Bench Press (Barbell)", "Chest", 4, 8, "6-10 • rest 90-120s", 105),
+                    PreMadeExercise("Incline Chest Press Machine", "Chest", 3, 10, "8-12 • rest 90s", 90),
+                    PreMadeExercise("Chest Butterfly Machine", "Chest", 3, 12, "12-15 • rest 60-90s", 75),
+                    PreMadeExercise("Triceps Press Machine", "Arms", 3, 10, "10-12 • rest 60-90s", 75),
+                    PreMadeExercise("Triceps Rope Pushdown", "Arms", 3, 12, "10-15 • rest 60-90s", 75)
                 )
             ),
             PreMadeRoutine(
@@ -533,11 +533,11 @@ class BackupRepository(
                 dayOfWeek = "Thursday",
                 targetMuscles = "Back, Arms",
                 exercises = listOf(
-                    PreMadeExercise("Lat Pulldown", "Back", 4, 10, "8-12 reps", 90),
-                    PreMadeExercise("T-Bar Row", "Back", 4, 8, "8-10 reps", 90),
-                    PreMadeExercise("Seated Cable Row", "Back", 3, 10, "10-12 reps", 90),
-                    PreMadeExercise("Barbell Bicep Curl", "Arms", 3, 10, "8-12 reps", 75),
-                    PreMadeExercise("Hammer Curl", "Arms", 3, 10, "10-12 reps", 75)
+                    PreMadeExercise("Lat Pulldown", "Back", 4, 10, "8-12 • rest 90s", 90),
+                    PreMadeExercise("T-Bar Row", "Back", 4, 8, "8-10 • rest 90s", 90),
+                    PreMadeExercise("Seated Cable Row", "Back", 3, 10, "10-12 • rest 90s", 90),
+                    PreMadeExercise("Barbell Bicep Curl", "Arms", 3, 10, "8-12 • rest 60-90s", 75),
+                    PreMadeExercise("Hammer Curl", "Arms", 3, 10, "10-12 • rest 60-90s", 75)
                 )
             ),
             PreMadeRoutine(
@@ -545,10 +545,10 @@ class BackupRepository(
                 dayOfWeek = "Friday",
                 targetMuscles = "Shoulders, Core",
                 exercises = listOf(
-                    PreMadeExercise("Dumbbell Shoulder Press", "Shoulders", 4, 8, "8-10 reps", 105),
-                    PreMadeExercise("Dumbbell Lateral Raise", "Shoulders", 4, 12, "12-15 reps", 75),
-                    PreMadeExercise("Cable Rear Delt Fly", "Shoulders", 3, 12, "12-15 reps", 75),
-                    PreMadeExercise("Abdominal Machine", "Core", 3, 12, "12-15 reps", 60)
+                    PreMadeExercise("Dumbbell Shoulder Press", "Shoulders", 4, 8, "8-10 • rest 90-120s", 105),
+                    PreMadeExercise("Dumbbell Lateral Raise", "Shoulders", 4, 12, "12-15 • rest 60-90s", 75),
+                    PreMadeExercise("Cable Rear Delt Fly", "Shoulders", 3, 12, "12-15 • rest 60-90s", 75),
+                    PreMadeExercise("Abdominal Machine", "Core", 3, 12, "12-15 • rest 60s", 60)
                 )
             ),
             PreMadeRoutine(
@@ -557,7 +557,7 @@ class BackupRepository(
                 targetMuscles = "Cardio, Full Body",
                 exercises = listOf(
                     PreMadeExercise("Cardio", "Cardio", 1, 35, "30-45 min", 0),
-                    PreMadeExercise("Stretching", "Full Body", 1, 1, "Full Body Stretching", 0)
+                    PreMadeExercise("Stretching", "Full Body", 1, 1, "Stretching", 0)
                 )
             )
         )

@@ -52,8 +52,15 @@ class WorkoutRepository(
     suspend fun deleteExerciseLog(log: ExerciseLog) = exerciseLogDao.deleteExerciseLog(log)
     suspend fun deleteExerciseLogById(id: Long) = exerciseLogDao.deleteExerciseLogById(id)
 
+    suspend fun getLatestFinishedExerciseLog(exerciseName: String) =
+        exerciseLogDao.getLatestFinishedExerciseLog(exerciseName)
+
+    suspend fun getPersonalBestForExerciseOnce(exerciseName: String) =
+        exerciseLogDao.getPersonalBestForExerciseOnce(exerciseName)
+
     /**
      * Clones a template workout into a new active completed workout session.
+     * Pre-fills sets with weights and reps from the most recent finished session.
      */
     suspend fun startWorkoutFromTemplate(template: Workout): Pair<Long, List<Long>> {
         val newWorkout = Workout(
@@ -70,16 +77,30 @@ class WorkoutRepository(
         // Clone template exercises for this active session
         val templateExercises = exerciseLogDao.getExercisesForWorkoutOnce(template.id)
         val clonedExercises = templateExercises.map { ex ->
+            val lastFinishedLog = exerciseLogDao.getLatestFinishedExerciseLog(ex.exerciseName)
+            val setsToUse = if (lastFinishedLog != null && lastFinishedLog.setsDataJson.isNotBlank()) {
+                val previousSets = com.example.model.ExerciseSet.listFromJsonString(lastFinishedLog.setsDataJson)
+                if (previousSets.isNotEmpty()) {
+                    previousSets.mapIndexed { idx, s ->
+                        s.copy(setNumber = idx + 1, isCompleted = false)
+                    }
+                } else {
+                    com.example.model.ExerciseSet.listFromJsonString(ex.setsDataJson).map { it.copy(isCompleted = false) }
+                }
+            } else {
+                com.example.model.ExerciseSet.listFromJsonString(ex.setsDataJson).map { it.copy(isCompleted = false) }
+            }
+
             ex.copy(
                 id = 0,
                 workoutId = workoutId,
+                setsCount = if (setsToUse.isNotEmpty()) setsToUse.size else ex.setsCount,
+                setsDataJson = com.example.model.ExerciseSet.listToJsonString(setsToUse),
+                maxKg = lastFinishedLog?.maxKg ?: ex.maxKg,
                 timestamp = System.currentTimeMillis()
             )
         }
         val exerciseIds = exerciseLogDao.insertExerciseLogs(clonedExercises)
-
-        // Update template's last performed timestamp
-        workoutDao.updateWorkout(template.copy(lastPerformedAt = System.currentTimeMillis()))
 
         return Pair(workoutId, exerciseIds)
     }
